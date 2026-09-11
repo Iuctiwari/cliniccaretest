@@ -1,0 +1,795 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model Clinic {
+  id             String  @id @default(cuid()) @map("_id")
+  name           String
+  address        String?
+  phone          String?
+  email          String?
+  doctorName     String?
+  degree         String?
+  regnNumber     String?
+  logoPath       String?
+  letterheadPath String?
+
+  // Drives the appointment slot grid on the booking screen — HH:mm 24h strings and a
+  // slot length in minutes, all with sane defaults so existing clinics need no migration data.
+  openTime    String @default("09:00")
+  closeTime   String @default("20:00")
+  slotMinutes Int    @default(15)
+
+  // Billing form toggles — a clinic that doesn't charge GST never sees a tax field,
+  // same idea as PatientFieldDefinition.required: config, not a code change. Columns
+  // always exist (0-cost when unused) so no schema branching is needed either way.
+  taxEnabled      Boolean @default(false)
+  taxLabel        String  @default("GST")
+  gstNumber       String?
+  discountEnabled Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ADMIN, DOCTOR, RECEPTIONIST, ASSISTANT are seeded defaults — admin can rename,
+// reshape, delete (if unassigned) or create new roles from the Permissions tab.
+model Role {
+  id          String  @id @default(cuid()) @map("_id")
+  name        String  @unique
+  // JSON-encoded PermissionKey[] (e.g. ["patients:view","patients:edit"]), carried over
+  // from before the Mongo migration — parsed/serialized in RolesService rather than
+  // added as a join table.
+  permissions String  @default("[]")
+  // True only for ADMIN — can't be renamed, have its permissions edited, or be
+  // deleted, so the clinic can never lock itself out of its own admin panel.
+  isLocked    Boolean @default(false)
+
+  users User[]
+}
+
+model User {
+  id           String  @id @default(cuid()) @map("_id")
+  name         String
+  username     String  @unique
+  mobile       String?
+  passwordHash String
+  pin          String?
+  roleId       String
+  role         Role    @relation(fields: [roleId], references: [id])
+  isActive     Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model FeeType {
+  id        String  @id @default(cuid()) @map("_id")
+  name      String  @unique
+  amount    Int
+  isDefault Boolean @default(false)
+  isActive  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Admin-defined extra patient fields — lets each clinic collect what it actually
+// needs (e.g. "Insurance ID") without a code change. fieldType: TEXT | NUMBER |
+// DATE | SELECT | BOOLEAN. Values live in Patient.customFields, keyed by `key`.
+//
+// isCore rows are seeded for every built-in Patient column (name, mobile, age, ...)
+// so admin can toggle visibility/required-ness of those too, the same way as custom
+// ones — their `key` matches the real Patient column and isCore locks fieldType/key
+// from being edited (the column's real type can't change), but required/isActive
+// stay fully admin-controlled like any other row.
+model PatientFieldDefinition {
+  id        String  @id @default(cuid()) @map("_id")
+  key       String  @unique
+  label     String
+  fieldType String  @default("TEXT")
+  options   String? // JSON string array, only meaningful for SELECT
+  required  Boolean @default(false)
+  isActive  Boolean @default(true)
+  isCore    Boolean @default(false)
+  order     Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// key: PATIENT | VISIT | BILL | CERTIFICATE
+model Counter {
+  id            String @id @default(cuid()) @map("_id")
+  key           String @unique
+  prefix        String
+  currentValue  Int    @default(0)
+  financialYear String
+}
+
+// Generic key/value store — currently used only for backup config: "backup_enabled",
+// "atlas_connection_string", "local_retention_count". See modules/backup.
+model Setting {
+  id    String @id @default(cuid()) @map("_id")
+  key   String @unique
+  value String
+}
+
+enum BackupStage {
+  LOCAL_DUMP
+  ATLAS_SYNC
+  // Atlas -> local, the reverse direction — triggered from Settings, always preceded by a
+  // safety dump of whatever was locally there first (see BackupService.restoreFromAtlas).
+  RESTORE
+}
+
+enum BackupStatus {
+  SUCCESS
+  FAILED
+  RETRYING
+  // Atlas sync attempted (nightly cron, or a manual "Backup Now") while no connection
+  // string was configured — logged explicitly rather than silently doing nothing, so
+  // "Recent attempts" never leaves the admin guessing whether cloud sync ran.
+  SKIPPED
+}
+
+// One row per backup attempt (not just a single "last backup" timestamp) — so the admin UI
+// can show real history, including failures, not just the last success. See modules/backup.
+model BackupLog {
+  id          String       @id @default(cuid()) @map("_id")
+  startedAt   DateTime     @default(now())
+  finishedAt  DateTime?
+  stage       BackupStage
+  status      BackupStatus
+  message     String?
+  archivePath String?
+  localCount  Int?
+  atlasCount  Int?
+
+  @@index([startedAt])
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  // Sentinel for when admin has switched off collecting gender via Settings → Patient
+  // Fields — keeps the column non-nullable so every existing read site (prints,
+  // lists, search) that assumes a real Gender string keeps working unchanged.
+  UNSPECIFIED
+}
+
+model Patient {
+  id              String    @id @default(cuid()) @map("_id")
+  patientId       String    @unique
+  name            String
+  age             Int
+  dob             DateTime?
+  gender          Gender
+  mobile          String
+  altMobile       String?
+  email           String?
+  address         String?
+  city            String?
+  pincode         String?
+  bloodGroup      String?
+  maritalStatus   String?
+  occupation      String?
+  allergies       String?
+  chronicDiseases String?
+  stage           String?
+  referredBy      String?
+  notes           String?
+  registeredOn    DateTime  @default(now())
+  isActive        Boolean   @default(true)
+  createdBy       String?
+  customFields    String? // JSON blob of {[PatientFieldDefinition.key]: value}, admin-configured
+
+  visits       Visit[]
+  followUps    FollowUp[]
+  appointments Appointment[]
+  certificates Certificate[]
+  bills        Bill[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([mobile])
+  @@index([name])
+}
+
+enum MedicineForm {
+  TABLET
+  CAPSULE
+  SYRUP
+  INJECTION
+  OINTMENT
+  DROPS
+  POWDER
+  OTHER
+  // Sentinel for when admin has switched off collecting form via Settings → Medicine
+  // Fields — keeps the column non-nullable so every existing read site keeps working.
+  UNSPECIFIED
+}
+
+// Same pattern as PatientFieldDefinition — lets admin add extra medicine fields and
+// toggle visibility/required-ness of the built-in ones. Values live in
+// Medicine.customFields, keyed by `key`.
+model MedicineFieldDefinition {
+  id        String  @id @default(cuid()) @map("_id")
+  key       String  @unique
+  label     String
+  fieldType String  @default("TEXT")
+  options   String? // JSON string array, only meaningful for SELECT
+  required  Boolean @default(false)
+  isActive  Boolean @default(true)
+  isCore    Boolean @default(false)
+  order     Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Same field-definition pattern as Patient and Medicine, for the consultation/visit form.
+// Core rows control real Visit/Vital columns; custom rows save into Visit.customFields.
+model VisitFieldDefinition {
+  id        String  @id @default(cuid()) @map("_id")
+  key       String  @unique
+  label     String
+  fieldType String  @default("TEXT")
+  options   String? // JSON string array, only meaningful for SELECT
+  required  Boolean @default(false)
+  isActive  Boolean @default(true)
+  isCore    Boolean @default(false)
+  order     Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum BeforeAfterFood {
+  BEFORE_FOOD
+  AFTER_FOOD
+  WITH_FOOD
+  EMPTY_STOMACH
+  ANYTIME
+}
+
+model Medicine {
+  id                     String          @id @default(cuid()) @map("_id")
+  brandName              String
+  genericName            String?
+  strength               String?
+  form                   MedicineForm
+  company                String?
+  category               String?
+  defaultDose            String?
+  defaultMorning         Int             @default(0)
+  defaultAfternoon       Int             @default(0)
+  defaultEvening         Int             @default(0)
+  defaultNight           Int             @default(0)
+  defaultBeforeAfterFood BeforeAfterFood @default(ANYTIME)
+  defaultDurationDays    Int?
+  defaultInstruction     String?
+  isFavourite            Boolean         @default(false)
+  isActive               Boolean         @default(true)
+  usageCount             Int             @default(0)
+  customFields           String? // JSON blob of {[MedicineFieldDefinition.key]: value}, admin-configured
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([brandName])
+  @@index([genericName])
+}
+
+enum VisitType {
+  NEW
+  FOLLOW_UP
+  EMERGENCY
+}
+
+enum VisitStatus {
+  WAITING
+  IN_CONSULTATION
+  COMPLETED
+  CANCELLED
+}
+
+model Visit {
+  id                    String      @id @default(cuid()) @map("_id")
+  visitNo               String      @unique
+  patientId             String
+  patient               Patient     @relation(fields: [patientId], references: [id])
+  doctorId              String?
+  visitDate             DateTime    @default(now())
+  visitType             VisitType   @default(NEW)
+  complaint             String?
+  complaintDurationDays Int?
+  examination           String?
+  diagnosis             String?
+  advice                String?
+  testsAdvised          String?
+  nextFollowUpDate      DateTime?
+  followUpAfterDays     Int?
+  consultationFee       Int?
+  status                VisitStatus @default(WAITING)
+  remark                String?
+  customFields          String? // JSON blob of {[VisitFieldDefinition.key]: value}, admin-configured
+  createdBy             String?
+
+  vital        Vital?
+  labTests     LabTest[]
+  followUps    FollowUp[]
+  prescription Prescription?
+  compliances  Compliance[]
+  // No formal relation to Bill — see the comment on Bill.visitId for why.
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId])
+  @@index([visitDate])
+  @@index([status])
+}
+
+model Vital {
+  id              String  @id @default(cuid()) @map("_id")
+  visitId         String  @unique
+  visit           Visit   @relation(fields: [visitId], references: [id])
+  bp              String?
+  pulse           Int?
+  temperature     Float?
+  weight          Float?
+  height          Float?
+  bmi             Float?
+  spo2            Int?
+  respiratoryRate Int?
+  sugarRandom     Int?
+  notes           String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum LabTestStatus {
+  ADVISED
+  DONE
+  CANCELLED
+}
+
+model LabTest {
+  id             String        @id @default(cuid()) @map("_id")
+  visitId        String
+  visit          Visit         @relation(fields: [visitId], references: [id])
+  patientId      String
+  testName       String
+  advisedOn      DateTime      @default(now())
+  resultValue    String?
+  resultUnit     String?
+  normalRange    String?
+  resultDate     DateTime?
+  remark         String?
+  attachmentPath String?
+  status         LabTestStatus @default(ADVISED)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId])
+  @@index([visitId])
+}
+
+enum FollowUpStatus {
+  PENDING
+  DONE
+  MISSED
+  RESCHEDULED
+  CANCELLED
+}
+
+enum ContactMode {
+  CALL
+  SMS
+  WHATSAPP
+  IN_PERSON
+}
+
+enum ContactResult {
+  WILL_COME
+  COMING_LATER
+  NOT_INTERESTED
+  NO_ANSWER
+  WRONG_NUMBER
+  RECOVERED
+}
+
+model FollowUp {
+  id        String         @id @default(cuid()) @map("_id")
+  patientId String
+  patient   Patient        @relation(fields: [patientId], references: [id])
+  visitId   String
+  visit     Visit          @relation(fields: [visitId], references: [id])
+  dueDate   DateTime
+  purpose   String?
+  status    FollowUpStatus @default(PENDING)
+
+  // MISSED is computed at read time (pending + >7 days overdue), not a stored transition —
+  // no cron/scheduler dependency needed and there's nothing yet (Day 10 notifications) that
+  // needs to react to the transition happening, only to read the current state.
+  contactedOn     DateTime?
+  contactedBy     String?
+  contactMode     ContactMode?
+  contactResult   ContactResult?
+  rescheduledTo   DateTime?
+  attendedOn      DateTime?
+  attendedVisitId String?
+  remark          String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId])
+  @@index([dueDate])
+  @@index([status])
+}
+
+model Prescription {
+  id                 String    @id @default(cuid()) @map("_id")
+  visitId            String    @unique
+  visit              Visit     @relation(fields: [visitId], references: [id])
+  patientId          String
+  date               DateTime  @default(now())
+  generalInstruction String?
+  printedAt          DateTime?
+  printCount         Int       @default(0)
+  createdBy          String?
+
+  items PrescriptionItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId])
+}
+
+model PrescriptionItem {
+  id              String          @id @default(cuid()) @map("_id")
+  prescriptionId  String
+  prescription    Prescription    @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  medicineId      String
+  medicineName    String
+  strength        String?
+  form            MedicineForm
+  dose            String?
+  morning         Int             @default(0)
+  afternoon       Int             @default(0)
+  evening         Int             @default(0)
+  night           Int             @default(0)
+  beforeAfterFood BeforeAfterFood @default(ANYTIME)
+  durationDays    Int
+  totalQuantity   Int
+  instruction     String?
+  sortOrder       Int             @default(0)
+
+  @@index([prescriptionId])
+}
+
+enum DocumentCategory {
+  LAB_REPORT
+  XRAY
+  PRESCRIPTION_SCAN
+  DISCHARGE_SUMMARY
+  ID_PROOF
+  OTHER
+}
+
+model Document {
+  id          String           @id @default(cuid()) @map("_id")
+  patientId   String
+  visitId     String?
+  fileName    String
+  filePath    String
+  fileType    String
+  fileSize    Int
+  category    DocumentCategory @default(OTHER)
+  description String?
+  uploadedOn  DateTime         @default(now())
+  uploadedBy  String?
+
+  @@index([patientId])
+  @@index([visitId])
+}
+
+enum ComplianceGrade {
+  GOOD
+  AVERAGE
+  POOR
+}
+
+enum ComplianceReasonForMissing {
+  FORGOT
+  COST
+  SIDE_EFFECT
+  FELT_BETTER
+  NOT_AVAILABLE
+  OTHER
+}
+
+// Formula lives in ComplianceService only (single source of truth) — see Info/ClinicCare guide 2.5.
+model Compliance {
+  id         String   @id @default(cuid()) @map("_id")
+  patientId  String
+  visitId    String
+  visit      Visit    @relation(fields: [visitId], references: [id])
+  recordedOn DateTime @default(now())
+
+  dosesPrescribed Int
+  dosesTaken      Int
+
+  medicinePercent   Float
+  followUpsGiven    Int
+  followUpsAttended Int
+  followUpPercent   Float
+  overallPercent    Float
+  grade             ComplianceGrade
+
+  reasonForMissing ComplianceReasonForMissing?
+  remark           String?
+  recordedBy       String?
+
+  @@index([patientId])
+  @@index([visitId])
+}
+
+enum AppointmentStatus {
+  BOOKED
+  CONFIRMED
+  ARRIVED
+  IN_CONSULTATION
+  DONE
+  CANCELLED
+  NO_SHOW
+}
+
+enum AppointmentSource {
+  WALK_IN
+  PHONE
+  ONLINE
+}
+
+model Appointment {
+  id              String            @id @default(cuid()) @map("_id")
+  patientId       String?
+  patient         Patient?          @relation(fields: [patientId], references: [id])
+  patientName     String
+  mobile          String
+  appointmentDate DateTime
+  timeSlot        String
+  tokenNo         Int
+  doctorId        String?
+  doctorName      String?
+  purpose         String?
+  status          AppointmentStatus @default(BOOKED)
+  source          AppointmentSource @default(WALK_IN)
+  remark          String?
+  visitId         String?
+  createdBy       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Token numbers are a single global sequence per day (see AppointmentsService.nextTokenForDay),
+  // handed out via count()+1 inside a transaction rather than an atomic $inc — Mongo
+  // transactions don't lock the count's range, so two concurrent bookings can still compute
+  // the same count. This unique index is the actual safety net: the loser's create() fails
+  // with a unique-constraint error, which AppointmentsService retries.
+  @@unique([appointmentDate, tokenNo])
+  @@index([appointmentDate])
+  @@index([status])
+  @@index([patientId])
+}
+
+enum CertificateType {
+  FITNESS
+  SICK_LEAVE
+  MEDICAL
+  REFERRAL
+  VACCINATION
+  CUSTOM
+}
+
+enum CertificateStatus {
+  ISSUED
+  CANCELLED
+}
+
+model Certificate {
+  id            String            @id @default(cuid()) @map("_id")
+  certificateNo String            @unique
+  patientId     String
+  patient       Patient           @relation(fields: [patientId], references: [id])
+  visitId       String?
+  type          CertificateType
+  issueDate     DateTime          @default(now())
+  fromDate      DateTime?
+  toDate        DateTime?
+  diagnosis     String?
+  // Auto-filled from a per-type wording template on the client (like the prescription's
+  // dose-in-words), then fully editable before saving — the exact wording is legally
+  // significant, so what gets printed is whatever text was actually saved here, never
+  // re-derived from the template at print time.
+  bodyText      String
+  status        CertificateStatus @default(ISSUED)
+  cancelReason  String?
+  issuedBy      String?
+  printedAt     DateTime?
+  printCount    Int               @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId])
+  @@index([issueDate])
+}
+
+enum BillStatus {
+  UNPAID
+  PARTIAL
+  PAID
+  CANCELLED
+}
+
+model Bill {
+  id              String     @id @default(cuid()) @map("_id")
+  billNo          String     @unique
+  patientId       String
+  patient         Patient    @relation(fields: [patientId], references: [id])
+  // Optional — a bill can stand alone (lab-only charge, product sale) instead of
+  // always coming from a completed visit.
+  //
+  // Deliberately NOT @unique here: Prisma's MongoDB connector has no schema syntax for a
+  // partial/sparse unique index, so a plain `String? @unique` would make Mongo's default
+  // unique index treat every null visitId as the same value — the second standalone bill
+  // ever created would fail with a duplicate-key error. The actual "one bill per visit"
+  // constraint is instead enforced by a partial unique index created out-of-band by
+  // src/database/ensure-mongo-indexes.ts (run on every boot, see start:prod).
+  visitId         String?
+  date            DateTime   @default(now())
+  subtotal        Int
+  discount        Int        @default(0)
+  taxPercent      Float?
+  taxAmount       Int        @default(0)
+  totalAmount     Int
+  paidAmount      Int        @default(0)
+  dueAmount       Int
+  status          BillStatus @default(UNPAID)
+  remark          String?
+  cancelReason    String?
+  cancelledBy     String?
+  cancelledByRole String?
+  cancelledAt     DateTime?
+  printedAt       DateTime?
+  printCount      Int        @default(0)
+  createdBy       String?
+
+  items    BillItem[]
+  payments Payment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([patientId])
+  @@index([date])
+  @@index([status])
+  @@index([visitId])
+}
+
+model PaymentAccount {
+  id                  String               @id @default(cuid()) @map("_id")
+  name                String               @unique
+  type                PaymentAccountType?  @default(CASH)
+  bankName            String?
+  accountNumberMasked String?
+  ifsc                String?
+  openingBalance      Int?                 @default(0)
+  openingBalanceDate  DateTime?            @default(now())
+  status              PaymentAccountStatus? @default(ACTIVE)
+  isDefault           Boolean              @default(false)
+
+  payments Payment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type])
+  @@index([status])
+}
+
+enum PaymentAccountType {
+  CASH
+  BANK
+}
+
+enum PaymentAccountStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ChargeDepartment {
+  CONSULTATION
+  DOCTOR_PROCEDURE
+  MEDICINE
+  NURSING
+  LAB_TEST
+  OTHER
+}
+
+enum BillItemStatus {
+  PENDING
+  CANCELLED
+  WAIVED
+}
+
+model BillItem {
+  id         String  @id @default(cuid()) @map("_id")
+  billId     String
+  bill       Bill    @relation(fields: [billId], references: [id], onDelete: Cascade)
+  // Nullable — an ad-hoc line typed free-hand isn't required to come from the FeeType
+  // master. name/unitAmount are a snapshot at bill time either way (same idea as
+  // PrescriptionItem.medicineName), so a later FeeType rename/price change never
+  // silently rewrites an already-saved bill.
+  feeTypeId  String?
+  name       String
+  quantity   Int     @default(1)
+  unitAmount Int
+  amount     Int
+  sortOrder  Int     @default(0)
+
+  department    ChargeDepartment @default(OTHER)
+  status        BillItemStatus   @default(PENDING)
+  // createdByRole/removedByRole are a cheap snapshot of the acting user's role at the
+  // time (already on their JWT, no extra query) — this is what answers "doctor, nurse,
+  // receptionist" directly; createdBy/removedBy (user id) is the deeper audit trail.
+  createdBy     String?
+  createdByRole String?
+  removedBy     String?
+  removedByRole String?
+  removedAt     DateTime?
+  removeReason  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([billId])
+}
+
+enum PaymentMode {
+  CASH
+  CARD
+  UPI
+  BANK_TRANSFER
+}
+
+model Payment {
+  id        String      @id @default(cuid()) @map("_id")
+  billId    String
+  bill      Bill        @relation(fields: [billId], references: [id], onDelete: Cascade)
+  amount    Int
+  mode      PaymentMode
+  reference String?
+  accountId String?
+  account   PaymentAccount? @relation(fields: [accountId], references: [id])
+  accountName String?
+  paidOn    DateTime    @default(now())
+  createdBy String?
+
+  @@index([billId])
+  @@index([accountId])
+  @@index([paidOn])
+}

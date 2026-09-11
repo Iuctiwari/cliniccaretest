@@ -1,0 +1,47 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-primary: #1f3864; /* navy, matches table header */
+  --color-navy: #1f3864;
+  --color-gold: #c9a227;
+  --color-bg: #f7fafa;
+
+  --font-sans:
+    'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+html {
+  font-size: 15px;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: #1a1a1a;
+  font-family: var(--font-sans);
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  html,
+  body,
+  main {
+    height: auto !important;
+    overflow: visible !important;
+  }
+}
+
+/* Chrome's native number-input spinner sits inside the input's own box — in a narrow
+   field (e.g. the M/A/E/N dose columns) it visually overlaps centered text, clipping
+   wide digits like "0" until they're misread as other characters. None of these fields
+   are used via the spinner arrows (values are typed), so drop it everywhere. */
+input[type='number'] {
+  -moz-appearance: textfield;
+}
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}

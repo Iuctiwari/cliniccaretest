@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs"
+  },
+  "include": [
+    "src/database/seed.ts",
+    "src/database/ensure-mongo-indexes.ts",
+    "src/database/restore-from-atlas.ts",
+    "src/modules/prisma/prisma.service.ts"
+  ],
+  "exclude": []
+}

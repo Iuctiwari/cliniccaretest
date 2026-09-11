@@ -1,0 +1,50 @@
+{
+  "name": "@clinic-care/api",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "build": "nest build",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "start": "nest start",
+    "start:dev": "npm run db:fix-appointment-token-types && npm run db:fix-duplicate-tokens && prisma db push && npm run db:ensure-indexes && npm run seed && nest start --watch",
+    "start:prod": "node dist/database/fix-appointment-token-types.js && node dist/database/fix-duplicate-tokens.js && prisma db push && node dist/database/ensure-mongo-indexes.js && npm run seed:prod && node dist/main",
+    "lint": "eslint \"src/**/*.ts\" --fix",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prisma:generate": "prisma generate",
+    "prisma:push": "prisma db push",
+    "db:ensure-indexes": "ts-node --project tsconfig.seed.json src/database/ensure-mongo-indexes.ts",
+    "db:restore-from-atlas": "ts-node --project tsconfig.seed.json src/database/restore-from-atlas.ts",
+    "db:fix-appointment-token-types": "ts-node --project tsconfig.seed.json src/database/fix-appointment-token-types.ts",
+    "db:fix-duplicate-tokens": "ts-node --project tsconfig.seed.json src/database/fix-duplicate-tokens.ts",
+    "db:backfill-bill-item-fields": "ts-node --project tsconfig.seed.json src/database/backfill-bill-item-fields.ts",
+    "seed": "ts-node --project tsconfig.seed.json src/database/seed.ts",
+    "seed:prod": "node dist/database/seed.js"
+  },
+  "dependencies": {
+    "@clinic-care/shared-types": "*",
+    "@nestjs/common": "^11.0.1",
+    "@nestjs/config": "^4.0.4",
+    "@nestjs/core": "^11.0.1",
+    "@nestjs/jwt": "^11.0.2",
+    "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/schedule": "^6.1.3",
+    "@prisma/client": "^6.19.3",
+    "bcryptjs": "^3.0.3",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "express": "^5.2.1",
+    "multer": "^2.2.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.0",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^22.10.7",
+    "prisma": "^6.19.3",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.7.3"
+  }
+}

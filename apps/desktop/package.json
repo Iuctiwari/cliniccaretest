@@ -1,0 +1,46 @@
+{
+  "name": "@clinic-care/desktop",
+  "private": true,
+  "version": "0.0.1",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "electron .",
+    "dev:wait": "node scripts/wait-and-start.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepare-resources": "node scripts/prepare-resources.js",
+    "dist": "npm run build && npm run prepare-resources && electron-builder"
+  },
+  "dependencies": {
+    "electron-log": "^5.4.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
+    "typescript": "^5.7.3",
+    "wait-on": "^9.1.0"
+  },
+  "build": {
+    "appId": "com.cliniccare.desktop",
+    "productName": "ClinicCare",
+    "electronVersion": "43.4.0",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*"
+    ],
+    "extraResources": [
+      { "from": "resources/api", "to": "api" },
+      { "from": "resources/web", "to": "web" }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
